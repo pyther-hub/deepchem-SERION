@@ -132,6 +132,7 @@ def validate_one_epoch(
     device: torch.device,
     tgt_tokenizer: ChemBPETokenizer = None,
     src_tokenizer: ChemBPETokenizer = None,
+    compute_decode_metrics: bool = True,
 ) -> Tuple[float, dict]:
     """Run a single validation pass and compute metrics.
 
@@ -142,11 +143,13 @@ def validate_one_epoch(
         device: Device.
         tgt_tokenizer: Target tokenizer for decoding (optional).
         src_tokenizer: Source tokenizer for decoding (optional).
+        compute_decode_metrics: If True, compute expensive decode metrics (exact match, BLEU).
+                                If False, only compute teacher forcing accuracy (faster).
 
     Returns:
         Tuple of (average validation loss, metrics dict).
-        Metrics dict contains: teacher_forcing_acc, exact_match_acc,
-        partial_sentence_acc, bleu_score.
+        Metrics dict contains: teacher_forcing_acc. If compute_decode_metrics=True,
+        also includes: exact_match_acc, partial_sentence_acc, bleu_score.
     """
     model.eval()
     total_loss = 0.0
@@ -180,8 +183,8 @@ def validate_one_epoch(
             teacher_forcing_logits.append(logits.reshape(-1, logits.size(-1)))
             teacher_forcing_labels.append(tgt_labels.reshape(-1))
 
-            # Decode predictions if tokenizers are provided
-            if tgt_tokenizer is not None:
+            # Decode predictions if tokenizers are provided and metrics requested
+            if tgt_tokenizer is not None and compute_decode_metrics:
                 pred_ids = model.greedy_decode(
                     src_ids=src_ids,
                     src_padding_mask=src_mask,

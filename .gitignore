@@ -1,2 +1,7 @@
 Claude.md
 experiments
+checkpoints/
+dataset/
+logs/
+results/
+tokenizers/

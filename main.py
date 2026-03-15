@@ -146,8 +146,10 @@ if __name__ == "__main__":
     else:
         logger.info(f"Training SMILES tokenizer (vocab_size={config['smiles_vocab_size']})...")
         smiles_tok = ChemBPETokenizer("smiles")
+        smiles_texts = df["SMILES_Canonical"].dropna().tolist()
+        logger.info(f"Filtered to {len(smiles_texts):,} valid SMILES (removed {df['SMILES_Canonical'].isna().sum()} NaN)")
         smiles_tok.train(
-            texts=df["SMILES_Canonical"].tolist(),
+            texts=smiles_texts,
             vocab_size=config["smiles_vocab_size"],
             min_freq=config["bpe_min_frequency"],
         )
@@ -160,8 +162,10 @@ if __name__ == "__main__":
     else:
         logger.info(f"Training IUPAC tokenizer (vocab_size={config['iupac_vocab_size']})...")
         iupac_tok = ChemBPETokenizer("iupac")
+        iupac_texts = df["iupac"].dropna().tolist()
+        logger.info(f"Filtered to {len(iupac_texts):,} valid IUPAC (removed {df['iupac'].isna().sum()} NaN)")
         iupac_tok.train(
-            texts=df["iupac"].tolist(),
+            texts=iupac_texts,
             vocab_size=config["iupac_vocab_size"],
             min_freq=config["bpe_min_frequency"],
         )
@@ -256,6 +260,7 @@ if __name__ == "__main__":
 
     for epoch in range(1, config["num_epochs"] + 1):
         verbose = (epoch == 1)
+        compute_full_metrics = (epoch >= 10)  # Full decode metrics only after epoch 10
 
         with Timer() as epoch_timer:
             train_loss = train_one_epoch(
@@ -278,6 +283,7 @@ if __name__ == "__main__":
                 device=device,
                 tgt_tokenizer=tgt_tok,
                 src_tokenizer=src_tok,
+                compute_decode_metrics=compute_full_metrics,
             )
 
         current_lr = optimizer.param_groups[0]["lr"]
@@ -291,13 +297,21 @@ if __name__ == "__main__":
             f"Time: {epoch_timer}"
             f"{' | * Best' if is_best else ''}"
         )
-        logger.info(
-            f"  Validation Metrics | "
-            f"Teacher Forcing Acc: {val_metrics['teacher_forcing_acc']:.2f}% | "
-            f"Complete Acc: {val_metrics['exact_match_acc']:.2f}% | "
-            f"Partial Acc: {val_metrics['partial_sentence_acc']:.2f}% | "
-            f"BLEU-4: {val_metrics['bleu_score']:.2f}"
-        )
+
+        # Log metrics (decode metrics only available after epoch 10)
+        if compute_full_metrics:
+            logger.info(
+                f"  Validation Metrics | "
+                f"Teacher Forcing Acc: {val_metrics['teacher_forcing_acc']:.2f}% | "
+                f"Complete Acc: {val_metrics['exact_match_acc']:.2f}% | "
+                f"Partial Acc: {val_metrics['partial_sentence_acc']:.2f}% | "
+                f"BLEU-4: {val_metrics['bleu_score']:.2f}"
+            )
+        else:
+            logger.info(
+                f"  Validation Metrics | "
+                f"Teacher Forcing Acc: {val_metrics['teacher_forcing_acc']:.2f}%"
+            )
 
         if is_best:
             best_val_loss = val_loss
