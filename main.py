@@ -74,7 +74,7 @@ config = {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 direction = "iupac2smiles"      # "iupac2smiles" or "smiles2iupac"
-DOWNLOAD_DATA = True            # True: stream from HuggingFace | False: load parquet
+DOWNLOAD_DATA = False            # True: stream from HuggingFace | False: load parquet
 TEST_RUN = False                # Tiny model for sanity checking
 
 if TEST_RUN:
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     if DOWNLOAD_DATA:
         df = download_and_prepare(config)
     else:
-        filtered_path = os.path.join(config["data_dir"], "filtered.parquet")
+        filtered_path = os.path.join("/kaggle/input/datasets/tensorpanda231/pubchem-dataset-v1/pubchem_data/10k/pubchem_10k.parquet")
         df = pd.read_parquet(filtered_path)
         if len(df) > config["max_samples"]:
             df = df.head(config["max_samples"]).reset_index(drop=True)
