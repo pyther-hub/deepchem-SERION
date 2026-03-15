@@ -104,7 +104,7 @@ def train_one_epoch(
         train_loss_sum += loss.item() * non_pad
         train_tokens += non_pad
 
-        if verbose:
+        if verbose and batch_idx % 100 == 0:
             step_time = time.time() - step_start
             elapsed = time.time() - epoch_start
             logger.info(
