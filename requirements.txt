@@ -1,0 +1,9 @@
+torch>=2.0
+datasets
+pandas
+pyarrow
+tokenizers
+numpy
+tqdm
+# Optional (graceful fallback if missing):
+# rdkit-pypi
