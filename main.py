@@ -56,7 +56,7 @@ config = {
     # ── Training ──────────────────────────────────────────
     "batch_size":        64,
     "num_epochs":        30,
-    "learning_rate":     3e-4,
+    "learning_rate":     1.0,      # Noam schedule: use 1.0, not 3e-4
     "warmup_steps":      4000,
     "grad_clip":         1.0,
     "label_smoothing":   0.1,
