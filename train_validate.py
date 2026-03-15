@@ -6,12 +6,19 @@ Called from main.py which owns the training loop.
 
 import logging
 import time
-from typing import Callable
+from typing import Callable, List, Tuple
 
 import torch
 import torch.nn as nn
 
 from model import Seq2SeqTransformer
+from metrics import (
+    compute_token_level_accuracy,
+    compute_exact_match_accuracy,
+    compute_bleu_score,
+    compute_token_level_accuracy_sequences,
+)
+from tokenizer import ChemBPETokenizer
 
 logger = logging.getLogger("smiles_iupac")
 
@@ -123,21 +130,33 @@ def validate_one_epoch(
     val_loader: torch.utils.data.DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> float:
-    """Run a single validation pass.
+    tgt_tokenizer: ChemBPETokenizer = None,
+    src_tokenizer: ChemBPETokenizer = None,
+) -> Tuple[float, dict]:
+    """Run a single validation pass and compute metrics.
 
     Args:
         model: The seq2seq model.
         val_loader: Validation DataLoader.
         criterion: Loss function.
         device: Device.
+        tgt_tokenizer: Target tokenizer for decoding (optional).
+        src_tokenizer: Source tokenizer for decoding (optional).
 
     Returns:
-        Average validation loss.
+        Tuple of (average validation loss, metrics dict).
+        Metrics dict contains: teacher_forcing_acc, exact_match_acc,
+        partial_sentence_acc, bleu_score.
     """
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+
+    # Metrics accumulation
+    teacher_forcing_logits = []
+    teacher_forcing_labels = []
+    all_predictions: List[str] = []
+    all_targets: List[str] = []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -157,4 +176,64 @@ def validate_one_epoch(
             total_loss += loss.item() * non_pad
             total_tokens += non_pad
 
-    return total_loss / max(total_tokens, 1)
+            # Accumulate logits and labels for teacher forcing accuracy
+            teacher_forcing_logits.append(logits.reshape(-1, logits.size(-1)))
+            teacher_forcing_labels.append(tgt_labels.reshape(-1))
+
+            # Decode predictions if tokenizers are provided
+            if tgt_tokenizer is not None:
+                pred_ids = model.greedy_decode(
+                    src_ids=src_ids,
+                    src_padding_mask=src_mask,
+                    max_len=tgt_labels.size(1),
+                    sos_id=tgt_tokenizer.sos_id,
+                    eos_id=tgt_tokenizer.eos_id,
+                    device=device,
+                )
+
+                # Decode to strings
+                for i in range(src_ids.size(0)):
+                    tgt_tokens = tgt_labels[i].tolist()
+                    tgt_str = tgt_tokenizer.decode(tgt_tokens)
+                    pred_str = tgt_tokenizer.decode(pred_ids[i])
+
+                    all_targets.append(tgt_str)
+                    all_predictions.append(pred_str)
+
+    # Compute metrics
+    metrics = {}
+
+    # 1. Teacher forcing output accuracy (token-level from logits)
+    if teacher_forcing_logits:
+        logits_combined = torch.cat(teacher_forcing_logits, dim=0)
+        labels_combined = torch.cat(teacher_forcing_labels, dim=0)
+        metrics["teacher_forcing_acc"] = compute_token_level_accuracy(
+            logits_combined, labels_combined, pad_id=0
+        )
+    else:
+        metrics["teacher_forcing_acc"] = 0.0
+
+    # 2. Complete accuracy (exact match on decoded sequences)
+    if all_predictions:
+        metrics["exact_match_acc"] = compute_exact_match_accuracy(
+            all_predictions, all_targets
+        )
+    else:
+        metrics["exact_match_acc"] = 0.0
+
+    # 3. Partial sentence accuracy (token-level on decoded sequences)
+    if all_predictions:
+        metrics["partial_sentence_acc"] = compute_token_level_accuracy_sequences(
+            all_predictions, all_targets
+        )
+    else:
+        metrics["partial_sentence_acc"] = 0.0
+
+    # 4. BLEU-4 score
+    if all_predictions:
+        metrics["bleu_score"] = compute_bleu_score(all_predictions, all_targets)
+    else:
+        metrics["bleu_score"] = 0.0
+
+    avg_loss = total_loss / max(total_tokens, 1)
+    return avg_loss, metrics

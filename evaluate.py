@@ -15,6 +15,11 @@ import torch
 from dataset import make_dataloaders
 from model import Seq2SeqTransformer
 from tokenizer import ChemBPETokenizer
+from metrics import (
+    compute_exact_match_accuracy,
+    compute_bleu_score,
+    compute_token_level_accuracy_sequences,
+)
 
 logger = logging.getLogger("smiles_iupac")
 
@@ -139,13 +144,28 @@ def evaluate_model(direction: str, config: dict, device: torch.device) -> None:
             all_targets.append(tgt_str)
             all_predictions.append(pred_str)
 
-    # Compute exact match accuracy
+    # Compute metrics
     matches = [p.strip() == t.strip() for p, t in zip(all_predictions, all_targets)]
     correct = sum(matches)
     total = len(matches)
-    accuracy = correct / total * 100 if total > 0 else 0.0
 
-    logger.info(f"Exact Match Accuracy: {accuracy:.1f}% ({correct} / {total})")
+    # 1. Exact match accuracy (complete accuracy)
+    exact_match_acc = compute_exact_match_accuracy(all_predictions, all_targets)
+
+    # 2. Partial sentence accuracy (token-level)
+    partial_sentence_acc = compute_token_level_accuracy_sequences(
+        all_predictions, all_targets
+    )
+
+    # 3. BLEU-4 score
+    bleu_score = compute_bleu_score(all_predictions, all_targets)
+
+    logger.info("")
+    logger.info("Test Set Metrics:")
+    logger.info("-" * 40)
+    logger.info(f"Complete (Exact Match) Accuracy: {exact_match_acc:.2f}% ({correct} / {total})")
+    logger.info(f"Partial Sentence (Token-Level) Accuracy: {partial_sentence_acc:.2f}%")
+    logger.info(f"BLEU-4 Score: {bleu_score:.2f}")
 
     # Log 20 random sample predictions
     logger.info("")

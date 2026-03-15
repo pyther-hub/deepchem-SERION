@@ -271,7 +271,14 @@ if __name__ == "__main__":
                 num_epochs=config["num_epochs"],
                 verbose=verbose,
             )
-            val_loss = validate_one_epoch(model, val_loader, criterion, device)
+            val_loss, val_metrics = validate_one_epoch(
+                model=model,
+                val_loader=val_loader,
+                criterion=criterion,
+                device=device,
+                tgt_tokenizer=tgt_tok,
+                src_tokenizer=src_tok,
+            )
 
         current_lr = optimizer.param_groups[0]["lr"]
         is_best = val_loss < best_val_loss
@@ -283,6 +290,13 @@ if __name__ == "__main__":
             f"LR: {current_lr:.2e} | "
             f"Time: {epoch_timer}"
             f"{' | * Best' if is_best else ''}"
+        )
+        logger.info(
+            f"  Validation Metrics | "
+            f"Teacher Forcing Acc: {val_metrics['teacher_forcing_acc']:.2f}% | "
+            f"Complete Acc: {val_metrics['exact_match_acc']:.2f}% | "
+            f"Partial Acc: {val_metrics['partial_sentence_acc']:.2f}% | "
+            f"BLEU-4: {val_metrics['bleu_score']:.2f}"
         )
 
         if is_best:
