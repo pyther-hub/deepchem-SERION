@@ -4,7 +4,6 @@ Provides train_one_epoch, validate_one_epoch, and the Noam LR lambda.
 Called from main.py which owns the training loop.
 """
 
-import logging
 import time
 from typing import Callable, List, Tuple
 
@@ -20,25 +19,28 @@ from metrics import (
 )
 from tokenizer import ChemBPETokenizer
 
-logger = logging.getLogger("smiles_iupac")
 
+def cosine_annealing_with_warmup(
+    warmup_steps: int, total_steps: int
+) -> Callable[[int], float]:
+    """Return a lambda for cosine annealing LR scheduling with linear warmup.
 
-def noam_lr_lambda(warmup_steps: int, d_model: int) -> Callable[[int], float]:
-    """Return a lambda for Noam-style LR scheduling.
-
-    Linear warmup for warmup_steps, then inverse square root decay.
+    Linear warmup for warmup_steps, then cosine annealing decay to near-zero.
 
     Args:
-        warmup_steps: Number of warmup steps.
-        d_model: Model dimension (used for scaling).
+        warmup_steps: Number of linear warmup steps.
+        total_steps: Total number of training steps.
 
     Returns:
         Lambda function for LambdaLR.
     """
+    import math
 
     def lr_lambda(step: int) -> float:
-        step = max(step, 1)
-        return (d_model ** -0.5) * min(step ** -0.5, step * warmup_steps ** -1.5)
+        if step < warmup_steps:
+            return float(step) / float(max(1, warmup_steps))
+        progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
     return lr_lambda
 
@@ -56,17 +58,17 @@ def train_one_epoch(
     num_epochs: int,
     verbose: bool = False,
 ) -> float:
-    """Run a single training epoch.
+    """Run a single training epoch with gradient accumulation.
 
     Args:
         model: The seq2seq model.
         train_loader: Training DataLoader.
         optimizer: Optimizer.
-        scheduler: LR scheduler (stepped per batch).
+        scheduler: LR scheduler (stepped per accumulation step).
         criterion: Loss function.
         scaler: GradScaler for mixed precision.
         device: Device.
-        config: Configuration dictionary.
+        config: Configuration dictionary (must include 'grad_clip' and optionally 'gradient_accumulation_steps').
         epoch: Current epoch number (1-indexed).
         num_epochs: Total number of epochs.
         verbose: If True, log every batch (used for first epoch).
@@ -77,10 +79,13 @@ def train_one_epoch(
     model.train()
     use_amp = device.type == "cuda"
     num_batches = len(train_loader)
+    grad_accum_steps = config.get("gradient_accumulation_steps", 1)
 
     train_loss_sum = 0.0
     train_tokens = 0
     epoch_start = time.time()
+    accum_loss = 0.0
+    accum_tokens = 0
 
     for batch_idx, batch in enumerate(train_loader, 1):
         step_start = time.time()
@@ -91,8 +96,6 @@ def train_one_epoch(
         src_mask = batch["src_padding_mask"].to(device)
         tgt_mask = batch["tgt_padding_mask"].to(device)
 
-        optimizer.zero_grad()
-
         with torch.amp.autocast("cuda", enabled=use_amp):
             logits = model(src_ids, tgt_input, src_mask, tgt_mask)
             loss = criterion(
@@ -100,21 +103,31 @@ def train_one_epoch(
                 tgt_labels.reshape(-1),
             )
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
+        # Scale loss for gradient accumulation
+        scaled_loss = loss / grad_accum_steps
+        scaler.scale(scaled_loss).backward()
 
         non_pad = (tgt_labels != 0).sum().item()
+        accum_loss += loss.item() * non_pad
+        accum_tokens += non_pad
         train_loss_sum += loss.item() * non_pad
         train_tokens += non_pad
+
+        # Optimizer step every grad_accum_steps batches
+        if batch_idx % grad_accum_steps == 0 or batch_idx == num_batches:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
+            accum_loss = 0.0
+            accum_tokens = 0
 
         if verbose and batch_idx % 100 == 0:
             step_time = time.time() - step_start
             elapsed = time.time() - epoch_start
-            logger.info(
+            print(
                 f"  Epoch {epoch:02d} | "
                 f"Batch {batch_idx:>4d}/{num_batches} | "
                 f"Loss: {loss.item():.4f} | "
