@@ -12,7 +12,6 @@ import torch.nn as nn
 
 from model import Seq2SeqTransformer
 from metrics import (
-    compute_token_level_accuracy,
     compute_exact_match_accuracy,
     compute_bleu_score,
     compute_token_level_accuracy_sequences,
@@ -168,9 +167,9 @@ def validate_one_epoch(
     total_loss = 0.0
     total_tokens = 0
 
-    # Metrics accumulation
-    teacher_forcing_logits = []
-    teacher_forcing_labels = []
+    # Metrics accumulation — incremental to avoid OOM
+    tf_correct = 0
+    tf_total = 0
     all_predictions: List[str] = []
     all_targets: List[str] = []
 
@@ -192,9 +191,13 @@ def validate_one_epoch(
             total_loss += loss.item() * non_pad
             total_tokens += non_pad
 
-            # Accumulate logits and labels for teacher forcing accuracy
-            teacher_forcing_logits.append(logits.reshape(-1, logits.size(-1)))
-            teacher_forcing_labels.append(tgt_labels.reshape(-1))
+            # Compute teacher forcing accuracy incrementally (avoid OOM from accumulating logits)
+            flat_logits = logits.reshape(-1, logits.size(-1))
+            flat_labels = tgt_labels.reshape(-1)
+            preds = torch.argmax(flat_logits, dim=-1)
+            mask = flat_labels != 0
+            tf_correct += ((preds == flat_labels) & mask).sum().item()
+            tf_total += mask.sum().item()
 
             # Decode predictions if tokenizers are provided and metrics requested
             if tgt_tokenizer is not None and compute_decode_metrics:
@@ -219,15 +222,8 @@ def validate_one_epoch(
     # Compute metrics
     metrics = {}
 
-    # 1. Teacher forcing output accuracy (token-level from logits)
-    if teacher_forcing_logits:
-        logits_combined = torch.cat(teacher_forcing_logits, dim=0)
-        labels_combined = torch.cat(teacher_forcing_labels, dim=0)
-        metrics["teacher_forcing_acc"] = compute_token_level_accuracy(
-            logits_combined, labels_combined, pad_id=0
-        )
-    else:
-        metrics["teacher_forcing_acc"] = 0.0
+    # 1. Teacher forcing output accuracy (token-level, computed incrementally)
+    metrics["teacher_forcing_acc"] = (tf_correct / tf_total * 100) if tf_total > 0 else 0.0
 
     # 2. Complete accuracy (exact match on decoded sequences)
     if all_predictions:
